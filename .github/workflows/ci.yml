@@ -1,0 +1,88 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Lint
+        run: |
+          pip install flake8 --quiet
+          flake8 agent-api/app.py --max-line-length=100
+
+  eval:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start agent API
+        run: |
+          docker compose up -d agent-api
+          # Wait up to 60s for the health check to pass before running evals.
+          # The API is fast to start; this guard prevents flaky test failures
+          # caused by a race between the runner and the API's startup.
+          timeout 60 bash -c 'until curl -sf http://localhost:8080/healthz; do sleep 2; done'
+
+      - name: Run eval suite (quality gate)
+        # The eval runner exits non-zero when any gate fails, which causes
+        # this job to fail and blocks the PR from merging.
+        run: docker compose --profile eval run --rm eval-runner
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          # Include SHA so each run's artifacts are uniquely identifiable.
+          name: eval-results-${{ github.sha }}
+          path: eval-results/
+
+      - name: Stop services
+        if: always()
+        run: docker compose down
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: eval
+    # Only deploy when a commit lands on main (not on PR builds).
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update deployment manifest with commit SHA
+        # Stamping the manifest with the exact SHA that passed eval creates an
+        # auditable link between what's running in production and the commit that
+        # produced it. Without this, "which version is deployed?" requires guessing.
+        run: |
+          sed -i 's/image_tag: ".*"/image_tag: "${{ github.sha }}"/' deployment/manifest.yml
+
+          # Append a row to the deployment history table in the manifest.
+          sed -i "s|# | (will be populated by CD pipeline)  ||# | $(date -u +%Y-%m-%dT%H:%M:%SZ) | ${{ github.sha }} | github-actions |\n# | (will be populated by CD pipeline)  ||" deployment/manifest.yml
+
+      - name: Commit deployment manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deployment/manifest.yml
+          git commit -m "deploy: stamp image_tag=${{ github.sha }} [skip ci]"
+          git push
+        # [skip ci] prevents this commit from triggering another pipeline run,
+        # which would create an infinite loop of deploy commits.
