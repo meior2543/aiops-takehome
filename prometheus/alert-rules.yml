@@ -1,0 +1,65 @@
+groups:
+  - name: agent-api-alerts
+    rules:
+      - alert: AgentAPIDown
+        expr: up{job="agent-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Agent API is down"
+          description: "The agent API has been unreachable for more than 1 minute."
+
+      # Fires when rejection rate exceeds 30% for 5 consecutive minutes.
+      # Baseline: traffic generator sends ~15% adversarial traffic, so normal rejection
+      # rate is ~15%. 30% means something outside normal adversarial traffic is being
+      # rejected — likely a config regression or a new attack pattern hitting
+      # previously-accepted message types.
+      - alert: HighRejectionRate
+        expr: |
+          sum(rate(agent_rejections_total[5m]))
+          /
+          sum(rate(agent_requests_total{route="/ask"}[5m]))
+          > 0.30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rejection rate above 30% for 5 minutes"
+          description: >
+            Rejection rate is {{ $value | humanizePercentage }} (threshold: 30%).
+            Check Grafana "Rejections by Reason" panel to identify which category is spiking.
+            Query: sum by(reason)(rate(agent_rejections_total[5m]))
+
+      # Fires when the current 5-minute rejection rate is more than 3x the 1-hour
+      # baseline AND is already above 10% (to avoid spurious fires at startup when
+      # the 1h window has little data). A 3x multiplier catches sudden spikes without
+      # being too sensitive to gradual drift.
+      - alert: RejectionRateSpike
+        expr: |
+          (
+            sum(rate(agent_rejections_total[5m]))
+            /
+            sum(rate(agent_requests_total{route="/ask"}[5m]))
+          )
+          > 3 *
+          (
+            sum(rate(agent_rejections_total[1h]))
+            /
+            sum(rate(agent_requests_total{route="/ask"}[1h]))
+          )
+          and
+          sum(rate(agent_rejections_total[5m]))
+          /
+          sum(rate(agent_requests_total{route="/ask"}[5m]))
+          > 0.10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Rejection rate spike: {{ $value | humanizePercentage }} (3x baseline)"
+          description: >
+            The 5-minute rejection rate is more than 3x the 1-hour baseline.
+            This pattern suggests a sudden change — new attack campaign, a prompt
+            version rollout, or a client sending malformed requests.
+            Check recent deployments and traffic sources.
