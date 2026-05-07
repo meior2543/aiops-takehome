@@ -80,12 +80,12 @@ def classify_rejection(message: str) -> tuple[bool, str | None]:
     Returns (rejected, reason) tuple.
     """
     message_lower = message.lower()
-    
+
     for reason, patterns in REJECTION_PATTERNS.items():
         for pattern in patterns:
             if re.search(pattern, message_lower):
                 return True, reason
-    
+
     return False, None
 
 
@@ -141,9 +141,9 @@ def ask():
                 'prompt_version': PROMPT_VERSION,
                 'answer': generate_response(message)
             }
-        
+
         return jsonify(response), 200
-    
+
     finally:
         ACTIVE_REQUESTS.dec()
         latency = time.time() - start_time
