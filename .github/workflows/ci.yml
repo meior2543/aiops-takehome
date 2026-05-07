@@ -85,9 +85,11 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add deployment/manifest.yml
-          # Pull latest to avoid push rejection if another commit landed during this run.
-          git pull --rebase origin main
           git commit -m "deploy: stamp image_tag=${{ github.sha }} [skip ci]"
+          # Pull --rebase AFTER committing so there are no staged changes that
+          # would cause rebase to abort. Our commit gets replayed on top of any
+          # remote changes, then we push cleanly.
+          git pull --rebase origin main
           git push
         # [skip ci] prevents this commit from triggering another pipeline run,
         # which would create an infinite loop of deploy commits.
