@@ -73,16 +73,20 @@ jobs:
         # auditable link between what's running in production and the commit that
         # produced it. Without this, "which version is deployed?" requires guessing.
         run: |
+          # Update image tag to the exact commit SHA that passed all gates.
           sed -i 's/image_tag: ".*"/image_tag: "${{ github.sha }}"/' deployment/manifest.yml
 
-          # Append a row to the deployment history table in the manifest.
-          sed -i "s|# | (will be populated by CD pipeline)  ||# | $(date -u +%Y-%m-%dT%H:%M:%SZ) | ${{ github.sha }} | github-actions |\n# | (will be populated by CD pipeline)  ||" deployment/manifest.yml
+          # Append a row to the deployment history table.
+          # Using echo >> avoids sed delimiter conflicts with the | characters in the table.
+          echo "# | $(date -u +%Y-%m-%dT%H:%M:%SZ) | ${{ github.sha }} | github-actions |" >> deployment/manifest.yml
 
       - name: Commit deployment manifest
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add deployment/manifest.yml
+          # Pull latest to avoid push rejection if another commit landed during this run.
+          git pull --rebase origin main
           git commit -m "deploy: stamp image_tag=${{ github.sha }} [skip ci]"
           git push
         # [skip ci] prevents this commit from triggering another pipeline run,
